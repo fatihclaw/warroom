@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { parseSocialUrl, getPlatformName } from "@/lib/url-parser";
 
-export function AddUrlDialog() {
+export function AddUrlDialog({ onSuccess }: { onSuccess?: () => void } = {}) {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -52,7 +52,9 @@ export function AddUrlDialog() {
 
       setUrl("");
       setOpen(false);
-      // TODO: refresh data
+      onSuccess?.();
+      // Reload the page to refresh data
+      window.location.reload();
     } catch (err: any) {
       setError(err.message);
     } finally {
