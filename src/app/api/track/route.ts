@@ -58,11 +58,13 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Auto-sync YouTube accounts immediately
-      if (platform === "youtube" && data) {
+      // Auto-sync accounts immediately
+      const syncPlatforms = ["youtube", "tiktok", "instagram", "twitter"];
+      if (syncPlatforms.includes(platform) && data) {
         try {
+          const origin = process.env.NEXT_PUBLIC_SUPABASE_URL ? req.nextUrl.origin : "http://localhost:3000";
           const syncRes = await fetch(
-            `${process.env.NEXT_PUBLIC_SUPABASE_URL ? req.nextUrl.origin : "http://localhost:3000"}/api/sync/youtube`,
+            `${origin}/api/sync/${platform === "twitter" ? "twitter" : platform}`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -123,13 +125,15 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Auto-sync YouTube videos immediately
-      if (platform === "youtube" && data) {
+      // Auto-sync videos immediately for all platforms
+      const videoSyncPlatforms = ["youtube", "tiktok", "instagram", "twitter"];
+      if (videoSyncPlatforms.includes(platform) && data) {
         try {
-          await fetch(`${req.nextUrl.origin}/api/sync/youtube`, {
+          const syncEndpoint = platform === "twitter" ? "twitter" : platform;
+          await fetch(`${req.nextUrl.origin}/api/sync/${syncEndpoint}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ type: "video", id }),
+            body: JSON.stringify({ type: "video", id, url, username }),
           });
         } catch {
           // Sync failed but video was created

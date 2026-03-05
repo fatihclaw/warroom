@@ -25,8 +25,15 @@ export async function POST(req: NextRequest) {
 
     for (const account of accounts) {
       try {
-        if (account.platform === "youtube") {
-          const res = await fetch(`${origin}/api/sync/youtube`, {
+        const syncEndpoints: Record<string, string> = {
+          youtube: "youtube",
+          tiktok: "tiktok",
+          instagram: "instagram",
+          twitter: "twitter",
+        };
+        const endpoint = syncEndpoints[account.platform];
+        if (endpoint) {
+          const res = await fetch(`${origin}/api/sync/${endpoint}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -42,7 +49,6 @@ export async function POST(req: NextRequest) {
             error: data.error,
           });
         }
-        // Add other platform sync handlers here
       } catch (err: any) {
         results.push({
           account: account.username,
