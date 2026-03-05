@@ -108,7 +108,7 @@ export async function getTikTokVideo(videoUrl: string): Promise<TikTokVideo | nu
 
     // Method 1: __UNIVERSAL_DATA_FOR_REHYDRATION__
     const universalMatch = html.match(
-      /<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.+?)<\/script>/s
+      /<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]+?)<\/script>/
     );
     if (universalMatch) {
       try {
@@ -122,7 +122,7 @@ export async function getTikTokVideo(videoUrl: string): Promise<TikTokVideo | nu
     // Method 2: SIGI_STATE
     if (!videoData) {
       const sigiMatch = html.match(
-        /<script id="SIGI_STATE"[^>]*>(.+?)<\/script>/s
+        /<script id="SIGI_STATE"[^>]*>([\s\S]+?)<\/script>/
       );
       if (sigiMatch) {
         try {
@@ -212,7 +212,7 @@ export async function getTikTokProfile(username: string): Promise<TikTokProfile 
 
     // Try __UNIVERSAL_DATA_FOR_REHYDRATION__
     const universalMatch = html.match(
-      /<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.+?)<\/script>/s
+      /<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]+?)<\/script>/
     );
     if (universalMatch) {
       try {
@@ -236,7 +236,7 @@ export async function getTikTokProfile(username: string): Promise<TikTokProfile 
 
     // Try SIGI_STATE
     const sigiMatch = html.match(
-      /<script id="SIGI_STATE"[^>]*>(.+?)<\/script>/s
+      /<script id="SIGI_STATE"[^>]*>([\s\S]+?)<\/script>/
     );
     if (sigiMatch) {
       try {
@@ -276,6 +276,64 @@ export async function getTikTokProfile(username: string): Promise<TikTokProfile 
     };
   } catch {
     return null;
+  }
+}
+
+// Search TikTok videos (used by discover route)
+// TikTok blocks server-side API calls, so this returns empty most of the time
+export async function searchTikTokVideos(
+  query: string,
+  _maxResults = 20
+): Promise<TikTokVideo[]> {
+  try {
+    const encodedQuery = encodeURIComponent(query);
+    const res = await fetch(
+      `https://www.tiktok.com/api/search/general/full/?keyword=${encodedQuery}&offset=0&search_id=0`,
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          Referer: "https://www.tiktok.com/",
+        },
+      }
+    );
+
+    if (!res.ok) return [];
+
+    const data = await res.json();
+    const items = data?.data || [];
+
+    return items
+      .filter((item: any) => item.type === 1 && item.item)
+      .map((item: any) => {
+        const v = item.item;
+        return {
+          id: v.id,
+          title: v.desc?.substring(0, 100) || "",
+          description: v.desc || "",
+          thumbnail: v.video?.cover || v.video?.dynamicCover || "",
+          authorName: v.author?.nickname || "",
+          authorUsername: v.author?.uniqueId || "",
+          viewCount: v.stats?.playCount || 0,
+          likeCount: v.stats?.diggCount || 0,
+          commentCount: v.stats?.commentCount || 0,
+          shareCount: v.stats?.shareCount || 0,
+          saveCount: v.stats?.collectCount || 0,
+          duration: v.video?.duration || 0,
+          hashtags: (v.textExtra || [])
+            .filter((t: any) => t.hashtagName)
+            .map((t: any) => `#${t.hashtagName}`.toLowerCase()),
+          createdAt: v.createTime
+            ? new Date(v.createTime * 1000).toISOString()
+            : "",
+          url: `https://www.tiktok.com/@${v.author?.uniqueId}/video/${v.id}`,
+        };
+      })
+      .sort(
+        (a: TikTokVideo, b: TikTokVideo) => b.viewCount - a.viewCount
+      );
+  } catch {
+    return [];
   }
 }
 

@@ -116,48 +116,96 @@ export async function GET(req: NextRequest) {
       })
     );
 
-    // Calculate previous period for % deltas
-    const prevCutoff = new Date(
-      now.getTime() - days * 2 * 86400000
-    ).toISOString();
-    let prevQuery = supabase
-      .from("videos")
-      .select("view_count, like_count, comment_count, share_count, save_count, engagement_rate")
-      .gte("published_at", prevCutoff)
-      .lt("published_at", cutoff);
-
-    if (platform && platform !== "all") {
-      prevQuery = prevQuery.eq("platform", platform);
-    }
-    if (accountId && accountId !== "all") {
-      prevQuery = prevQuery.eq("account_id", accountId);
-    }
-
-    const { data: prevVideos } = await prevQuery;
-
-    const prevTotalViews = prevVideos?.reduce((s, v) => s + (v.view_count || 0), 0) || 0;
-    const prevTotalLikes = prevVideos?.reduce((s, v) => s + (v.like_count || 0), 0) || 0;
-    const prevTotalComments = prevVideos?.reduce((s, v) => s + (v.comment_count || 0), 0) || 0;
-    const prevTotalShares = prevVideos?.reduce((s, v) => s + (v.share_count || 0), 0) || 0;
-    const prevTotalSaves = prevVideos?.reduce((s, v) => s + (v.save_count || 0), 0) || 0;
-    const prevAvgEngagement =
-      prevVideos && prevVideos.length > 0
-        ? prevVideos.reduce((s, v) => s + (v.engagement_rate || 0), 0) / prevVideos.length
-        : 0;
-
+    // Calculate deltas: try snapshot-based (7-day comparison) first, fall back to period comparison
     function pctChange(current: number, previous: number): number {
       if (previous === 0) return current > 0 ? 100 : 0;
       return Number((((current - previous) / previous) * 100).toFixed(1));
     }
 
-    const deltas = {
-      totalViews: pctChange(totalViews, prevTotalViews),
-      totalLikes: pctChange(totalLikes, prevTotalLikes),
-      totalComments: pctChange(totalComments, prevTotalComments),
-      totalShares: pctChange(totalShares, prevTotalShares),
-      totalSaves: pctChange(totalSaves, prevTotalSaves),
-      avgEngagement: pctChange(avgEngagement, prevAvgEngagement),
+    let deltas = {
+      totalViews: 0,
+      totalLikes: 0,
+      totalComments: 0,
+      totalShares: 0,
+      totalSaves: 0,
+      avgEngagement: 0,
     };
+
+    // Try snapshot-based deltas (compare current metrics vs 7 days ago)
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 86400000).toISOString();
+    const videoIds = (videos || []).map((v) => v.id);
+
+    if (videoIds.length > 0) {
+      const { data: snapshots } = await supabase
+        .from("metrics_snapshots")
+        .select("video_id, view_count, like_count, comment_count, share_count, save_count, engagement_rate")
+        .in("video_id", videoIds.slice(0, 200))
+        .lte("captured_at", sevenDaysAgo)
+        .order("captured_at", { ascending: false })
+        .limit(videoIds.length);
+
+      if (snapshots && snapshots.length > 0) {
+        // Use latest snapshot per video
+        const snapshotMap = new Map<string, typeof snapshots[0]>();
+        for (const s of snapshots) {
+          if (!snapshotMap.has(s.video_id)) snapshotMap.set(s.video_id, s);
+        }
+
+        const prevViews = Array.from(snapshotMap.values()).reduce((s, v) => s + (v.view_count || 0), 0);
+        const prevLikes = Array.from(snapshotMap.values()).reduce((s, v) => s + (v.like_count || 0), 0);
+        const prevComments = Array.from(snapshotMap.values()).reduce((s, v) => s + (v.comment_count || 0), 0);
+        const prevShares = Array.from(snapshotMap.values()).reduce((s, v) => s + (v.share_count || 0), 0);
+        const prevSaves = Array.from(snapshotMap.values()).reduce((s, v) => s + (v.save_count || 0), 0);
+        const prevEngagement = snapshotMap.size > 0
+          ? Array.from(snapshotMap.values()).reduce((s, v) => s + (v.engagement_rate || 0), 0) / snapshotMap.size
+          : 0;
+
+        deltas = {
+          totalViews: pctChange(totalViews, prevViews),
+          totalLikes: pctChange(totalLikes, prevLikes),
+          totalComments: pctChange(totalComments, prevComments),
+          totalShares: pctChange(totalShares, prevShares),
+          totalSaves: pctChange(totalSaves, prevSaves),
+          avgEngagement: pctChange(avgEngagement, prevEngagement),
+        };
+      } else {
+        // Fall back to period-based comparison
+        const prevCutoff = new Date(now.getTime() - days * 2 * 86400000).toISOString();
+        let prevQuery = supabase
+          .from("videos")
+          .select("view_count, like_count, comment_count, share_count, save_count, engagement_rate")
+          .gte("published_at", prevCutoff)
+          .lt("published_at", cutoff);
+
+        if (platform && platform !== "all") {
+          prevQuery = prevQuery.eq("platform", platform);
+        }
+        if (accountId && accountId !== "all") {
+          prevQuery = prevQuery.eq("account_id", accountId);
+        }
+
+        const { data: prevVideos } = await prevQuery;
+
+        const prevTotalViews = prevVideos?.reduce((s, v) => s + (v.view_count || 0), 0) || 0;
+        const prevTotalLikes = prevVideos?.reduce((s, v) => s + (v.like_count || 0), 0) || 0;
+        const prevTotalComments = prevVideos?.reduce((s, v) => s + (v.comment_count || 0), 0) || 0;
+        const prevTotalShares = prevVideos?.reduce((s, v) => s + (v.share_count || 0), 0) || 0;
+        const prevTotalSaves = prevVideos?.reduce((s, v) => s + (v.save_count || 0), 0) || 0;
+        const prevAvgEngagement =
+          prevVideos && prevVideos.length > 0
+            ? prevVideos.reduce((s, v) => s + (v.engagement_rate || 0), 0) / prevVideos.length
+            : 0;
+
+        deltas = {
+          totalViews: pctChange(totalViews, prevTotalViews),
+          totalLikes: pctChange(totalLikes, prevTotalLikes),
+          totalComments: pctChange(totalComments, prevTotalComments),
+          totalShares: pctChange(totalShares, prevTotalShares),
+          totalSaves: pctChange(totalSaves, prevTotalSaves),
+          avgEngagement: pctChange(avgEngagement, prevAvgEngagement),
+        };
+      }
+    }
 
     return NextResponse.json({
       metrics: {

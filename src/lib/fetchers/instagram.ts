@@ -90,7 +90,7 @@ export async function getInstagramPost(postUrl: string): Promise<InstagramPost |
 
       // Method 1: Look for shared data in script tags
       const sharedDataMatch = html.match(
-        /window\._sharedData\s*=\s*({.+?});<\/script>/s
+        /window\._sharedData\s*=\s*({[\s\S]+?});<\/script>/
       );
       if (sharedDataMatch) {
         try {
@@ -104,7 +104,7 @@ export async function getInstagramPost(postUrl: string): Promise<InstagramPost |
       // Method 2: Look for __additionalData or meta tags
       if (!postData) {
         const additionalMatch = html.match(
-          /window\.__additionalDataLoaded\s*\([^,]+,\s*({.+?})\s*\)\s*;/s
+          /window\.__additionalDataLoaded\s*\([^,]+,\s*({[\s\S]+?})\s*\)\s*;/
         );
         if (additionalMatch) {
           try {
@@ -243,7 +243,7 @@ export async function getInstagramProfile(username: string): Promise<InstagramPr
 
     // Method 1: window._sharedData
     const sharedDataMatch = html.match(
-      /window\._sharedData\s*=\s*({.+?});<\/script>/s
+      /window\._sharedData\s*=\s*({[\s\S]+?});<\/script>/
     );
     if (sharedDataMatch) {
       try {

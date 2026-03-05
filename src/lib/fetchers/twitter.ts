@@ -121,7 +121,7 @@ export async function getTweet(tweetId: string, username?: string): Promise<Twee
   const oembed = await getTweetOembed(url);
   if (oembed) {
     // Extract text from oembed HTML
-    const textMatch = oembed.html.match(/<p[^>]*>(.*?)<\/p>/s);
+    const textMatch = oembed.html.match(/<p[^>]*>([\s\S]*?)<\/p>/);
     const text = textMatch?.[1]?.replace(/<[^>]+>/g, "") || "";
 
     return {
@@ -184,6 +184,7 @@ export async function getTwitterProfile(username: string): Promise<TwitterProfil
     const avatarMatch = html.match(
       /class="[^"]*Avatar[^"]*"[^>]*src="([^"]+)"/
     ) || html.match(/profile_image[^"]*"[^>]*src="([^"]+)"/);
+
     if (avatarMatch) avatar = avatarMatch[1];
 
     // Try to extract display name
@@ -258,6 +259,26 @@ export async function searchPopularTweets(
     createdAt: tweet.created_at,
     hashtags: extractHashtags(tweet.text),
     url: `https://x.com/${users[tweet.author_id]?.username || "i"}/status/${tweet.id}`,
+  }));
+}
+
+// Get trending topics (requires bearer token, uses v1.1 endpoint)
+export async function getTrendingTopics(
+  bearerToken: string,
+  woeid = 1
+): Promise<{ name: string; tweetVolume: number | null; url: string }[]> {
+  const res = await fetch(
+    `https://api.twitter.com/1.1/trends/place.json?id=${woeid}`,
+    { headers: { Authorization: `Bearer ${bearerToken}` } }
+  );
+
+  if (!res.ok) return [];
+
+  const data = await res.json();
+  return (data[0]?.trends || []).map((t: any) => ({
+    name: t.name,
+    tweetVolume: t.tweet_volume,
+    url: t.url,
   }));
 }
 
