@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Sidebar } from "@/components/layout/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { HealthBanner } from "@/components/health-banner";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -31,7 +32,10 @@ export default function RootLayout({
       >
         <TooltipProvider>
           <Sidebar />
-          <main className="pl-60 min-h-screen">{children}</main>
+          <main className="pl-60 min-h-screen">
+            <HealthBanner />
+            {children}
+          </main>
         </TooltipProvider>
       </body>
     </html>

@@ -5,6 +5,7 @@ import {
   getChannelVideos,
   getVideoById,
 } from "@/lib/fetchers/youtube";
+import { getApiKey } from "@/lib/keys";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -15,10 +16,10 @@ const supabase = createClient(
 // POST /api/sync/youtube — sync a YouTube account or video
 export async function POST(req: NextRequest) {
   try {
-    const apiKey = process.env.YOUTUBE_API_KEY;
+    const apiKey = await getApiKey("youtube_api_key");
     if (!apiKey) {
       return NextResponse.json(
-        { error: "YouTube API key not configured. Add YOUTUBE_API_KEY to Settings." },
+        { error: "YouTube API key not configured. Add it in Settings." },
         { status: 400 }
       );
     }
@@ -103,10 +104,52 @@ export async function POST(req: NextRequest) {
           : 0,
       });
 
+      // Extract trends from outlier videos (nx_avg > 3)
+      const outliers = videos.filter(
+        (v) => v.viewCount / avgViews > 3
+      );
+      for (const v of outliers) {
+        const hashtags = (`${v.title} ${v.description}`).match(/#\w+/g) || [];
+        // Upsert video as a trend
+        await supabase.from("trends").upsert(
+          {
+            platform: "youtube",
+            type: "video",
+            name: v.title,
+            data: {
+              videoId: v.id,
+              channelTitle: channel.title,
+              viewCount: v.viewCount,
+              nxAvg: Number((v.viewCount / avgViews).toFixed(2)),
+              hashtags: hashtags.map((t: string) => t.toLowerCase()),
+              thumbnail: v.thumbnail,
+              url: `https://youtube.com/watch?v=${v.id}`,
+            },
+            score: v.viewCount,
+          },
+          { onConflict: "platform,type,name" }
+        );
+        // Upsert each hashtag as a trend
+        for (const tag of hashtags) {
+          const lower = tag.toLowerCase();
+          await supabase.from("trends").upsert(
+            {
+              platform: "youtube",
+              type: "hashtag",
+              name: lower,
+              data: { fromSync: true, sampleVideo: v.id },
+              score: v.viewCount,
+            },
+            { onConflict: "platform,type,name" }
+          );
+        }
+      }
+
       return NextResponse.json({
         success: true,
         channel: channel.title,
         videosSynced: videos.length,
+        outliers: outliers.length,
       });
     } else {
       // Sync a single video

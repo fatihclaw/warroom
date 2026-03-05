@@ -1,21 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { getApiKey } from "@/lib/keys";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
   { auth: { autoRefreshToken: false, persistSession: false } }
 );
-
-// Helper to get API key from user settings
-async function getApiKey(key: string): Promise<string | null> {
-  const { data } = await supabase
-    .from("users")
-    .select("settings")
-    .eq("id", "00000000-0000-0000-0000-000000000001")
-    .single();
-  return data?.settings?.[key] || null;
-}
 
 // GET /api/explore — search for YouTube channels
 export async function GET(req: NextRequest) {

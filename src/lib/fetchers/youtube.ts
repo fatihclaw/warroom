@@ -135,6 +135,101 @@ export async function getChannelVideos(
   }));
 }
 
+// Get YouTube video categories for a region
+export async function getVideoCategories(
+  apiKey: string,
+  regionCode = "US"
+): Promise<{ id: string; title: string }[]> {
+  const res = await fetch(
+    `${API_BASE}/videoCategories?part=snippet&regionCode=${regionCode}&key=${apiKey}`
+  );
+  const data = await res.json();
+  return (data.items || []).map((item: any) => ({
+    id: item.id,
+    title: item.snippet.title,
+  }));
+}
+
+// Get trending/most popular videos
+export async function getTrendingVideos(
+  apiKey: string,
+  regionCode = "US",
+  categoryId?: string,
+  maxResults = 25
+): Promise<YouTubeVideoInfo[]> {
+  let url = `${API_BASE}/videos?part=snippet,contentDetails,statistics&chart=mostPopular&regionCode=${regionCode}&maxResults=${maxResults}&key=${apiKey}`;
+  if (categoryId) url += `&videoCategoryId=${categoryId}`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`YouTube trending error: ${await res.text()}`);
+  const data = await res.json();
+
+  return (data.items || []).map((v: any) => ({
+    id: v.id,
+    title: v.snippet.title,
+    description: v.snippet.description?.substring(0, 500) || "",
+    thumbnail:
+      v.snippet.thumbnails?.maxres?.url ||
+      v.snippet.thumbnails?.high?.url ||
+      v.snippet.thumbnails?.default?.url ||
+      "",
+    publishedAt: v.snippet.publishedAt,
+    duration: parseDuration(v.contentDetails.duration),
+    viewCount: parseInt(v.statistics.viewCount || "0"),
+    likeCount: parseInt(v.statistics.likeCount || "0"),
+    commentCount: parseInt(v.statistics.commentCount || "0"),
+    channelId: v.snippet.channelId,
+    channelTitle: v.snippet.channelTitle,
+  }));
+}
+
+// Search for viral videos by keyword
+export async function searchViralVideos(
+  apiKey: string,
+  query: string,
+  publishedAfter?: string,
+  maxResults = 25
+): Promise<YouTubeVideoInfo[]> {
+  let searchUrl = `${API_BASE}/search?part=snippet&type=video&order=viewCount&q=${encodeURIComponent(query)}&maxResults=${maxResults}&key=${apiKey}`;
+  if (publishedAfter) searchUrl += `&publishedAfter=${publishedAfter}`;
+
+  const searchRes = await fetch(searchUrl);
+  if (!searchRes.ok) throw new Error(`YouTube search error: ${await searchRes.text()}`);
+  const searchData = await searchRes.json();
+
+  const videoIds = (searchData.items || [])
+    .map((item: any) => item.id?.videoId)
+    .filter(Boolean)
+    .join(",");
+
+  if (!videoIds) return [];
+
+  const statsRes = await fetch(
+    `${API_BASE}/videos?part=snippet,contentDetails,statistics&id=${videoIds}&key=${apiKey}`
+  );
+  const statsData = await statsRes.json();
+
+  return (statsData.items || [])
+    .map((v: any) => ({
+      id: v.id,
+      title: v.snippet.title,
+      description: v.snippet.description?.substring(0, 500) || "",
+      thumbnail:
+        v.snippet.thumbnails?.maxres?.url ||
+        v.snippet.thumbnails?.high?.url ||
+        v.snippet.thumbnails?.default?.url ||
+        "",
+      publishedAt: v.snippet.publishedAt,
+      duration: parseDuration(v.contentDetails.duration),
+      viewCount: parseInt(v.statistics.viewCount || "0"),
+      likeCount: parseInt(v.statistics.likeCount || "0"),
+      commentCount: parseInt(v.statistics.commentCount || "0"),
+      channelId: v.snippet.channelId,
+      channelTitle: v.snippet.channelTitle,
+    }))
+    .sort((a: YouTubeVideoInfo, b: YouTubeVideoInfo) => b.viewCount - a.viewCount);
+}
+
 export async function getVideoById(
   videoId: string,
   apiKey: string

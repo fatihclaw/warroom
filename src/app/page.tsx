@@ -15,6 +15,9 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AddUrlDialog } from "@/components/add-url-dialog";
+import { ViewsChart } from "@/components/charts/views-chart";
+import { ViralityChart } from "@/components/charts/virality-chart";
+import { DurationChart } from "@/components/charts/duration-chart";
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + "B";
@@ -75,8 +78,12 @@ interface IntelData {
     avgEngagement: number;
     videoCount: number;
   };
+  deltas?: Record<string, number>;
   topVideos: any[];
   accounts: any[];
+  viralityBuckets: Record<string, number>;
+  durationAnalysis: { range: string; avgViews: number; count: number }[];
+  videos: any[];
 }
 
 export default function Dashboard() {
@@ -92,6 +99,24 @@ export default function Dashboard() {
   }, []);
 
   const m = data?.metrics;
+  const deltas = data?.deltas || {};
+
+  // Build views-over-time chart data from videos
+  const viewsChartData = (() => {
+    if (!data?.videos?.length) return [];
+    const byDate: Record<string, number> = {};
+    for (const v of data.videos) {
+      if (!v.published_at) continue;
+      const date = new Date(v.published_at).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+      });
+      byDate[date] = (byDate[date] || 0) + (v.view_count || 0);
+    }
+    return Object.entries(byDate)
+      .map(([date, views]) => ({ date, views }))
+      .slice(-30);
+  })();
 
   return (
     <div className="p-6 space-y-6">
@@ -114,42 +139,42 @@ export default function Dashboard() {
         <MetricCard
           title="Total Views"
           value={formatNumber(m?.totalViews || 0)}
-          change={0}
+          change={deltas.totalViews || 0}
           icon={Eye}
         />
         <MetricCard
           title="Engagement Rate"
           value={`${m?.avgEngagement?.toFixed(1) || "0"}%`}
-          change={0}
+          change={deltas.avgEngagement || 0}
           icon={BarChart3}
         />
         <MetricCard
           title="Likes"
           value={formatNumber(m?.totalLikes || 0)}
-          change={0}
+          change={deltas.totalLikes || 0}
           icon={ThumbsUp}
         />
         <MetricCard
           title="Comments"
           value={formatNumber(m?.totalComments || 0)}
-          change={0}
+          change={deltas.totalComments || 0}
           icon={MessageCircle}
         />
         <MetricCard
           title="Shares"
           value={formatNumber(m?.totalShares || 0)}
-          change={0}
+          change={deltas.totalShares || 0}
           icon={Share2}
         />
         <MetricCard
           title="Saves"
           value={formatNumber(m?.totalSaves || 0)}
-          change={0}
+          change={deltas.totalSaves || 0}
           icon={Bookmark}
         />
       </div>
 
-      {/* Charts placeholder */}
+      {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="bg-[#1a1a2e] border-white/5">
           <CardHeader>
@@ -158,11 +183,15 @@ export default function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex h-[300px] items-center justify-center text-muted-foreground text-sm">
-              {loading
-                ? "Loading..."
-                : "Add tracked accounts to see analytics"}
-            </div>
+            {viewsChartData.length > 0 ? (
+              <ViewsChart data={viewsChartData} />
+            ) : (
+              <div className="flex h-[300px] items-center justify-center text-muted-foreground text-sm">
+                {loading
+                  ? "Loading..."
+                  : "Add tracked accounts to see analytics"}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -173,14 +202,33 @@ export default function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex h-[300px] items-center justify-center text-muted-foreground text-sm">
-              {loading
-                ? "Loading..."
-                : "Track videos to see virality analysis"}
-            </div>
+            {data?.viralityBuckets &&
+            Object.values(data.viralityBuckets).some((v) => v > 0) ? (
+              <ViralityChart data={data.viralityBuckets} />
+            ) : (
+              <div className="flex h-[300px] items-center justify-center text-muted-foreground text-sm">
+                {loading
+                  ? "Loading..."
+                  : "Track videos to see virality analysis"}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
+
+      {/* Duration Analysis */}
+      {data?.durationAnalysis && data.durationAnalysis.length > 0 && (
+        <Card className="bg-[#1a1a2e] border-white/5">
+          <CardHeader>
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Optimal Video Duration
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <DurationChart data={data.durationAnalysis} />
+          </CardContent>
+        </Card>
+      )}
 
       {/* Most Viral Videos */}
       <Card className="bg-[#1a1a2e] border-white/5">

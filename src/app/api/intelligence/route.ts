@@ -115,6 +115,49 @@ export async function GET(req: NextRequest) {
       })
     );
 
+    // Calculate previous period for % deltas
+    const prevCutoff = new Date(
+      now.getTime() - days * 2 * 86400000
+    ).toISOString();
+    let prevQuery = supabase
+      .from("videos")
+      .select("view_count, like_count, comment_count, share_count, save_count, engagement_rate")
+      .gte("published_at", prevCutoff)
+      .lt("published_at", cutoff);
+
+    if (platform && platform !== "all") {
+      prevQuery = prevQuery.eq("platform", platform);
+    }
+    if (accountId && accountId !== "all") {
+      prevQuery = prevQuery.eq("account_id", accountId);
+    }
+
+    const { data: prevVideos } = await prevQuery;
+
+    const prevTotalViews = prevVideos?.reduce((s, v) => s + (v.view_count || 0), 0) || 0;
+    const prevTotalLikes = prevVideos?.reduce((s, v) => s + (v.like_count || 0), 0) || 0;
+    const prevTotalComments = prevVideos?.reduce((s, v) => s + (v.comment_count || 0), 0) || 0;
+    const prevTotalShares = prevVideos?.reduce((s, v) => s + (v.share_count || 0), 0) || 0;
+    const prevTotalSaves = prevVideos?.reduce((s, v) => s + (v.save_count || 0), 0) || 0;
+    const prevAvgEngagement =
+      prevVideos && prevVideos.length > 0
+        ? prevVideos.reduce((s, v) => s + (v.engagement_rate || 0), 0) / prevVideos.length
+        : 0;
+
+    function pctChange(current: number, previous: number): number {
+      if (previous === 0) return current > 0 ? 100 : 0;
+      return Number((((current - previous) / previous) * 100).toFixed(1));
+    }
+
+    const deltas = {
+      totalViews: pctChange(totalViews, prevTotalViews),
+      totalLikes: pctChange(totalLikes, prevTotalLikes),
+      totalComments: pctChange(totalComments, prevTotalComments),
+      totalShares: pctChange(totalShares, prevTotalShares),
+      totalSaves: pctChange(totalSaves, prevTotalSaves),
+      avgEngagement: pctChange(avgEngagement, prevAvgEngagement),
+    };
+
     return NextResponse.json({
       metrics: {
         totalViews,
@@ -125,6 +168,7 @@ export async function GET(req: NextRequest) {
         avgEngagement: Number(avgEngagement.toFixed(2)),
         videoCount: videos?.length || 0,
       },
+      deltas,
       accounts: accounts || [],
       topVideos,
       viralityBuckets,

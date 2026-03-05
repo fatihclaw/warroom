@@ -1,7 +1,12 @@
-// AI client for Kimi K2.5 via Fireworks AI (or any OpenAI-compatible API)
+// AI client for Kimi K2.5 via Fireworks AI with Ollama fallback
+
+import { getApiKey } from "@/lib/keys";
 
 const FIREWORKS_API_URL = "https://api.fireworks.ai/inference/v1/chat/completions";
-const MODEL = "accounts/fireworks/models/kimi-k2-5-flash";
+const FIREWORKS_MODEL = "accounts/fireworks/models/kimi-k2-5-flash";
+
+const OLLAMA_URL = "http://localhost:11434/api/chat";
+const OLLAMA_MODEL = "qwen3.5:9b";
 
 interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -11,6 +16,67 @@ interface ChatMessage {
 interface AIResponse {
   content: string;
   usage?: { prompt_tokens: number; completion_tokens: number };
+  provider: "fireworks" | "ollama";
+}
+
+async function callFireworks(
+  apiKey: string,
+  messages: ChatMessage[],
+  options: { temperature?: number; maxTokens?: number; json?: boolean }
+): Promise<AIResponse> {
+  const res = await fetch(FIREWORKS_API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: FIREWORKS_MODEL,
+      messages,
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.maxTokens ?? 2048,
+      ...(options.json ? { response_format: { type: "json_object" } } : {}),
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Fireworks API error (${res.status}): ${err}`);
+  }
+
+  const data = await res.json();
+  return {
+    content: data.choices[0].message.content,
+    usage: data.usage,
+    provider: "fireworks",
+  };
+}
+
+async function callOllama(
+  messages: ChatMessage[],
+  options: { temperature?: number; json?: boolean }
+): Promise<AIResponse> {
+  const res = await fetch(OLLAMA_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: OLLAMA_MODEL,
+      messages,
+      stream: false,
+      options: { temperature: options.temperature ?? 0.7 },
+      ...(options.json ? { format: "json" } : {}),
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Ollama error (${res.status}): ${await res.text()}`);
+  }
+
+  const data = await res.json();
+  return {
+    content: data.message?.content || "",
+    provider: "ollama",
+  };
 }
 
 export async function chatCompletion(
@@ -21,43 +87,29 @@ export async function chatCompletion(
     json?: boolean;
   } = {}
 ): Promise<AIResponse> {
-  const apiKey = process.env.KIMI_API_KEY;
+  // Try Fireworks first
+  const fireworksKey = await getApiKey("fireworks_api_key");
+  if (fireworksKey) {
+    try {
+      return await callFireworks(fireworksKey, messages, options);
+    } catch (e) {
+      console.warn("Fireworks failed, trying Ollama fallback:", (e as Error).message);
+    }
+  }
 
-  if (!apiKey || apiKey === "placeholder_add_later") {
-    // Fallback: generate mock responses for development
+  // Fallback to Ollama
+  try {
+    return await callOllama(messages, options);
+  } catch {
+    // Both failed
     return {
       content: JSON.stringify({
         message:
-          "AI features require a Fireworks AI API key. Add KIMI_API_KEY to your .env.local file.",
+          "AI features require either a Fireworks API key (Settings page) or local Ollama running with qwen3.5:9b.",
       }),
+      provider: "ollama",
     };
   }
-
-  const res = await fetch(FIREWORKS_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      messages,
-      temperature: options.temperature ?? 0.7,
-      max_tokens: options.maxTokens ?? 2048,
-      ...(options.json ? { response_format: { type: "json_object" } } : {}),
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`AI API error (${res.status}): ${err}`);
-  }
-
-  const data = await res.json();
-  return {
-    content: data.choices[0].message.content,
-    usage: data.usage,
-  };
 }
 
 // Generate content ideas based on trending data and gap analysis
