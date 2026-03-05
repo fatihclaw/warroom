@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const platform = searchParams.get("platform");
     const accountId = searchParams.get("account_id");
-    const timeRange = searchParams.get("range") || "30d";
+    const timeRange = searchParams.get("range") || "all";
 
     // Calculate date cutoff
     const now = new Date();
@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
       "30d": 30,
       "90d": 90,
       "1y": 365,
+      "all": 99999,
     };
     const days = daysMap[timeRange] || 99999;
     const cutoff = new Date(now.getTime() - days * 86400000).toISOString();
@@ -34,10 +35,10 @@ export async function GET(req: NextRequest) {
 
     if (accErr) throw accErr;
 
-    // Build video query
+    // Build video query — include account info for display
     let videoQuery = supabase
       .from("videos")
-      .select("*")
+      .select("*, tracked_accounts(username, display_name, avatar_url)")
       .gte("published_at", cutoff)
       .order("view_count", { ascending: false });
 

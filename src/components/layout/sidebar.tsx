@@ -52,7 +52,12 @@ export function Sidebar() {
       {/* Logo */}
       <div className="flex h-16 items-center gap-2 px-6">
         <Zap className="h-6 w-6 text-pink" />
-        <span className="text-lg font-bold tracking-tight">WAR ROOM</span>
+        <div>
+          <span className="text-lg font-bold tracking-tight">WAR ROOM</span>
+          <p className="text-[9px] uppercase tracking-widest text-muted-foreground -mt-0.5">
+            Content Intelligence
+          </p>
+        </div>
       </div>
 
       {/* Navigation */}
@@ -131,11 +136,24 @@ export function Sidebar() {
         >
           <Settings className="h-4 w-4" />
           Settings
+          <ChevronRight className="h-3 w-3 ml-auto" />
         </Link>
         <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground">
           <LogOut className="h-4 w-4" />
           Logout
         </button>
+        {/* User avatar */}
+        <div className="flex items-center gap-3 px-3 py-3 mt-2">
+          <div className="h-8 w-8 rounded-full bg-[#ec4899]/20 flex items-center justify-center text-sm font-bold text-[#ec4899]">
+            S
+          </div>
+          <div>
+            <p className="text-sm font-medium leading-none">Steve Tan</p>
+            <span className="mt-1 inline-block text-[9px] font-bold uppercase tracking-wider bg-[#ec4899] text-white px-1.5 py-0.5 rounded">
+              Super Admin
+            </span>
+          </div>
+        </div>
       </div>
     </aside>
   );
