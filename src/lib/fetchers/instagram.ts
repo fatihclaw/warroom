@@ -1,4 +1,4 @@
-// Instagram fetcher — uses oembed + public page scraping (no API key needed)
+// Instagram fetcher — uses Apify Actor: apify/instagram-scraper
 
 export interface InstagramPost {
   id: string;
@@ -31,12 +31,29 @@ export interface InstagramProfile {
   isVerified: boolean;
 }
 
-const HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.9",
-};
+const APIFY_TOKEN = () => process.env.APIFY_API_TOKEN || "";
+const ACTOR_ID = "apify~instagram-scraper";
+
+async function runApifyActor(input: Record<string, any>): Promise<any[]> {
+  const token = APIFY_TOKEN();
+  if (!token) throw new Error("APIFY_API_TOKEN not configured");
+
+  const res = await fetch(
+    `https://api.apify.com/v2/acts/${ACTOR_ID}/run-sync-get-dataset-items?token=${token}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, timeoutSecs: 120 }),
+    }
+  );
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Apify Instagram error (${res.status}): ${text.substring(0, 200)}`);
+  }
+
+  return res.json();
+}
 
 // Get post info via Instagram's oembed endpoint (reliable, public)
 export async function getInstagramOembed(
@@ -50,8 +67,7 @@ export async function getInstagramOembed(
 } | null> {
   try {
     const res = await fetch(
-      `https://api.instagram.com/oembed/?url=${encodeURIComponent(url)}&omitscript=true`,
-      { headers: HEADERS }
+      `https://api.instagram.com/oembed/?url=${encodeURIComponent(url)}&omitscript=true`
     );
     if (!res.ok) return null;
     const data = await res.json();
@@ -67,126 +83,24 @@ export async function getInstagramOembed(
   }
 }
 
-// Fetch post details via scraping the public page
+// Fetch post details via Apify
 export async function getInstagramPost(postUrl: string): Promise<InstagramPost | null> {
   try {
-    // Get oembed first for basic info
-    const oembed = await getInstagramOembed(postUrl);
-
-    // Extract shortcode from URL
     const shortcodeMatch = postUrl.match(/\/(p|reel|reels)\/([A-Za-z0-9_-]+)/);
     const shortcode = shortcodeMatch?.[2] || "";
 
-    // Try scraping the page for embedded JSON
-    const res = await fetch(postUrl, {
-      headers: HEADERS,
-      redirect: "follow",
+    const items = await runApifyActor({
+      directUrls: [postUrl],
+      resultsType: "posts",
+      resultsLimit: 1,
     });
 
-    let postData: any = null;
-
-    if (res.ok) {
-      const html = await res.text();
-
-      // Method 1: Look for shared data in script tags
-      const sharedDataMatch = html.match(
-        /window\._sharedData\s*=\s*({[\s\S]+?});<\/script>/
-      );
-      if (sharedDataMatch) {
-        try {
-          const json = JSON.parse(sharedDataMatch[1]);
-          const media =
-            json?.entry_data?.PostPage?.[0]?.graphql?.shortcode_media;
-          if (media) postData = media;
-        } catch { /* parse failed */ }
-      }
-
-      // Method 2: Look for __additionalData or meta tags
-      if (!postData) {
-        const additionalMatch = html.match(
-          /window\.__additionalDataLoaded\s*\([^,]+,\s*({[\s\S]+?})\s*\)\s*;/
-        );
-        if (additionalMatch) {
-          try {
-            const json = JSON.parse(additionalMatch[1]);
-            const media = json?.graphql?.shortcode_media || json?.items?.[0];
-            if (media) postData = media;
-          } catch { /* parse failed */ }
-        }
-      }
-
-      // Method 3: Extract from meta tags
-      if (!postData) {
-        const ogVideo = html.match(
-          /property="og:video"\s+content="([^"]+)"/
-        );
-        const ogImage = html.match(
-          /property="og:image"\s+content="([^"]+)"/
-        );
-        const ogDescription = html.match(
-          /property="og:description"\s+content="([^"]+)"/
-        );
-        const ogTitle = html.match(
-          /property="og:title"\s+content="([^"]+)"/
-        );
-
-        if (ogImage || ogDescription) {
-          const description = decodeHtmlEntities(ogDescription?.[1] || oembed?.title || "");
-          // Parse likes/comments from description like "X likes, Y comments"
-          const likesMatch = description.match(/([\d,.]+[KMB]?)\s+likes/i);
-          const commentsMatch = description.match(/([\d,.]+[KMB]?)\s+comments/i);
-
-          return {
-            id: shortcode,
-            shortcode,
-            title: oembed?.title || decodeHtmlEntities(ogTitle?.[1] || ""),
-            description,
-            thumbnail: ogImage?.[1] || oembed?.thumbnail || "",
-            authorName: oembed?.authorName || "",
-            authorUsername: oembed?.authorName || "",
-            viewCount: 0,
-            likeCount: parseMetricString(likesMatch?.[1] || "0"),
-            commentCount: parseMetricString(commentsMatch?.[1] || "0"),
-            shareCount: 0,
-            saveCount: 0,
-            duration: 0,
-            hashtags: extractHashtags(description),
-            isVideo: !!ogVideo || postUrl.includes("/reel"),
-            createdAt: "",
-            url: postUrl,
-          };
-        }
-      }
+    if (items.length > 0) {
+      return mapPostItem(items[0], shortcode, postUrl);
     }
 
-    // If we have scraped data, use it
-    if (postData) {
-      return {
-        id: postData.id || shortcode,
-        shortcode: postData.shortcode || shortcode,
-        title: postData.edge_media_to_caption?.edges?.[0]?.node?.text?.substring(0, 200) || oembed?.title || "",
-        description: postData.edge_media_to_caption?.edges?.[0]?.node?.text || oembed?.title || "",
-        thumbnail: postData.display_url || postData.thumbnail_src || oembed?.thumbnail || "",
-        authorName: postData.owner?.full_name || oembed?.authorName || "",
-        authorUsername: postData.owner?.username || oembed?.authorName || "",
-        viewCount: postData.video_view_count || 0,
-        likeCount: postData.edge_media_preview_like?.count || 0,
-        commentCount: postData.edge_media_to_comment?.count || postData.edge_media_preview_comment?.count || 0,
-        shareCount: 0,
-        saveCount: 0,
-        duration: postData.video_duration || 0,
-        hashtags: extractHashtags(
-          postData.edge_media_to_caption?.edges?.[0]?.node?.text || ""
-        ),
-        isVideo: postData.is_video || postUrl.includes("/reel"),
-        createdAt: postData.taken_at_timestamp
-          ? new Date(postData.taken_at_timestamp * 1000).toISOString()
-          : "",
-        url: postUrl,
-      };
-    }
-
-    // Fallback: oembed-only data
+    // Fallback to oembed
+    const oembed = await getInstagramOembed(postUrl);
     if (oembed) {
       return {
         id: shortcode,
@@ -211,90 +125,64 @@ export async function getInstagramPost(postUrl: string): Promise<InstagramPost |
 
     return null;
   } catch {
+    // Fallback to oembed on any Apify error
+    const oembed = await getInstagramOembed(postUrl);
+    if (oembed) {
+      const shortcodeMatch = postUrl.match(/\/(p|reel|reels)\/([A-Za-z0-9_-]+)/);
+      const shortcode = shortcodeMatch?.[2] || "";
+      return {
+        id: shortcode,
+        shortcode,
+        title: oembed.title,
+        description: oembed.title,
+        thumbnail: oembed.thumbnail,
+        authorName: oembed.authorName,
+        authorUsername: oembed.authorName,
+        viewCount: 0,
+        likeCount: 0,
+        commentCount: 0,
+        shareCount: 0,
+        saveCount: 0,
+        duration: 0,
+        hashtags: extractHashtags(oembed.title),
+        isVideo: postUrl.includes("/reel"),
+        createdAt: "",
+        url: postUrl,
+      };
+    }
     return null;
   }
 }
 
-// Fetch profile info by scraping the public page
+// Fetch profile info via Apify
 export async function getInstagramProfile(username: string): Promise<InstagramProfile | null> {
   try {
     const cleanUsername = username.replace("@", "").replace(/\/$/, "");
-    const url = `https://www.instagram.com/${cleanUsername}/`;
 
-    const res = await fetch(url, {
-      headers: HEADERS,
-      redirect: "follow",
+    const items = await runApifyActor({
+      directUrls: [`https://www.instagram.com/${cleanUsername}/`],
+      resultsType: "details",
+      resultsLimit: 1,
     });
 
-    if (!res.ok) {
+    if (items.length > 0) {
+      const p = items[0];
       return {
-        username: cleanUsername,
-        displayName: cleanUsername,
-        avatar: "",
-        followerCount: 0,
-        followingCount: 0,
-        postCount: 0,
-        bio: "",
-        isVerified: false,
-      };
-    }
-
-    const html = await res.text();
-
-    // Method 1: window._sharedData
-    const sharedDataMatch = html.match(
-      /window\._sharedData\s*=\s*({[\s\S]+?});<\/script>/
-    );
-    if (sharedDataMatch) {
-      try {
-        const json = JSON.parse(sharedDataMatch[1]);
-        const user = json?.entry_data?.ProfilePage?.[0]?.graphql?.user;
-        if (user) {
-          return {
-            username: user.username || cleanUsername,
-            displayName: user.full_name || cleanUsername,
-            avatar: user.profile_pic_url_hd || user.profile_pic_url || "",
-            followerCount: user.edge_followed_by?.count || 0,
-            followingCount: user.edge_follow?.count || 0,
-            postCount: user.edge_owner_to_timeline_media?.count || 0,
-            bio: user.biography || "",
-            isVerified: user.is_verified || false,
-          };
-        }
-      } catch { /* parse failed */ }
-    }
-
-    // Method 2: Extract from meta tags
-    const ogDescription = html.match(
-      /property="og:description"\s+content="([^"]+)"/
-    );
-    const ogImage = html.match(
-      /property="og:image"\s+content="([^"]+)"/
-    );
-
-    if (ogDescription) {
-      const desc = decodeHtmlEntities(ogDescription[1]);
-      // Parse "1.2M Followers, 100 Following, 500 Posts"
-      const followersMatch = desc.match(/([\d,.]+[KMB]?)\s+Followers/i);
-      const followingMatch = desc.match(/([\d,.]+[KMB]?)\s+Following/i);
-      const postsMatch = desc.match(/([\d,.]+[KMB]?)\s+Posts/i);
-
-      return {
-        username: cleanUsername,
-        displayName: cleanUsername,
-        avatar: ogImage?.[1] || "",
-        followerCount: parseMetricString(followersMatch?.[1] || "0"),
-        followingCount: parseMetricString(followingMatch?.[1] || "0"),
-        postCount: parseMetricString(postsMatch?.[1] || "0"),
-        bio: "",
-        isVerified: false,
+        username: p.username || cleanUsername,
+        displayName: p.fullName || p.full_name || cleanUsername,
+        avatar: p.profilePicUrlHD || p.profilePicUrl || p.profile_pic_url_hd || p.profile_pic_url || "",
+        followerCount: p.followersCount || p.followedByCount || p.edge_followed_by?.count || 0,
+        followingCount: p.followsCount || p.followCount || p.edge_follow?.count || 0,
+        postCount: p.postsCount || p.mediaCount || p.edge_owner_to_timeline_media?.count || 0,
+        bio: p.biography || p.bio || "",
+        isVerified: p.verified || p.isVerified || p.is_verified || false,
       };
     }
 
     return {
       username: cleanUsername,
       displayName: cleanUsername,
-      avatar: ogImage?.[1] || "",
+      avatar: "",
       followerCount: 0,
       followingCount: 0,
       postCount: 0,
@@ -306,26 +194,73 @@ export async function getInstagramProfile(username: string): Promise<InstagramPr
   }
 }
 
+// Search Instagram posts via Apify
+export async function searchInstagramPosts(
+  query: string,
+  maxResults = 20
+): Promise<InstagramPost[]> {
+  try {
+    const items = await runApifyActor({
+      search: query,
+      resultsType: "posts",
+      resultsLimit: Math.min(maxResults, 30),
+    });
+
+    return items
+      .map((item: any) => mapPostItem(item))
+      .filter((p): p is InstagramPost => p !== null)
+      .sort((a, b) => (b.viewCount || b.likeCount) - (a.viewCount || a.likeCount));
+  } catch {
+    return [];
+  }
+}
+
+function mapPostItem(item: any, fallbackShortcode?: string, fallbackUrl?: string): InstagramPost | null {
+  if (!item) return null;
+
+  const shortcode = item.shortCode || item.shortcode || item.code || fallbackShortcode || "";
+  const caption = item.caption || item.edge_media_to_caption?.edges?.[0]?.node?.text || "";
+  const url = item.url || fallbackUrl || `https://www.instagram.com/p/${shortcode}/`;
+
+  return {
+    id: item.id || shortcode,
+    shortcode,
+    title: caption.substring(0, 200),
+    description: caption,
+    thumbnail:
+      item.displayUrl ||
+      item.display_url ||
+      item.thumbnailUrl ||
+      item.thumbnail_src ||
+      "",
+    authorName:
+      item.ownerFullName ||
+      item.owner?.full_name ||
+      item.ownerUsername ||
+      "",
+    authorUsername:
+      item.ownerUsername ||
+      item.owner?.username ||
+      "",
+    viewCount: item.videoViewCount || item.video_view_count || item.playCount || 0,
+    likeCount: item.likesCount || item.likes || item.edge_media_preview_like?.count || 0,
+    commentCount: item.commentsCount || item.comments || item.edge_media_to_comment?.count || 0,
+    shareCount: 0,
+    saveCount: 0,
+    duration: item.videoDuration || item.video_duration || 0,
+    hashtags: item.hashtags
+      ? item.hashtags.map((h: string) => `#${h.toLowerCase()}`)
+      : extractHashtags(caption),
+    isVideo: item.isVideo || item.is_video || item.type === "Video" || url.includes("/reel"),
+    createdAt: item.timestamp || item.taken_at_timestamp
+      ? new Date(
+          (item.timestamp || item.taken_at_timestamp) * (String(item.timestamp || item.taken_at_timestamp).length <= 10 ? 1000 : 1)
+        ).toISOString()
+      : "",
+    url,
+  };
+}
+
 function extractHashtags(text: string): string[] {
   return (text.match(/#\w+/g) || []).map((t) => t.toLowerCase());
-}
-
-function parseMetricString(str: string): number {
-  if (!str) return 0;
-  const clean = str.replace(/,/g, "");
-  const num = parseFloat(clean);
-  if (clean.toUpperCase().endsWith("B")) return Math.round(num * 1_000_000_000);
-  if (clean.toUpperCase().endsWith("M")) return Math.round(num * 1_000_000);
-  if (clean.toUpperCase().endsWith("K")) return Math.round(num * 1_000);
-  return Math.round(num) || 0;
-}
-
-function decodeHtmlEntities(str: string): string {
-  return str
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#x27;/g, "'");
 }

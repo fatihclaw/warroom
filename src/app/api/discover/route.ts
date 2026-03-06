@@ -5,8 +5,9 @@ import {
   searchViralVideos,
   getVideoCategories,
 } from "@/lib/fetchers/youtube";
-import { searchPopularTweets, getTrendingTopics } from "@/lib/fetchers/twitter";
+import { searchPopularTweets } from "@/lib/fetchers/twitter";
 import { searchTikTokVideos } from "@/lib/fetchers/tiktok";
+import { searchInstagramPosts } from "@/lib/fetchers/instagram";
 import { getApiKey } from "@/lib/keys";
 
 const supabase = createClient(
@@ -114,27 +115,26 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // ---- X / TWITTER ----
+    // ---- X / TWITTER (via Apify) ----
     if (platformFilter === "all" || platformFilter === "twitter") {
-      const twitterToken = await getApiKey("twitter_bearer_token");
-      if (twitterToken) {
+      const apifyToken = process.env.APIFY_API_TOKEN;
+      if (apifyToken) {
         try {
-          // Search popular tweets
           const searchQuery = query || "viral OR trending";
-          const tweets = await searchPopularTweets(twitterToken, searchQuery, 25);
+          const tweets = await searchPopularTweets(searchQuery, 25);
           results.push(
             ...tweets.map((t) => ({
               id: t.id,
               platform: "twitter",
               title: t.text.substring(0, 120),
               description: t.text,
-              thumbnail: "",
+              thumbnail: t.mediaUrl || "",
               channelTitle: `@${t.authorUsername}`,
               viewCount: t.viewCount,
               likeCount: t.likeCount,
               commentCount: t.replyCount,
               publishedAt: t.createdAt,
-              url: `https://x.com/${t.authorUsername}/status/${t.id}`,
+              url: t.url,
               source: query ? "search" : "trending",
               extra: {
                 retweetCount: t.retweetCount,
@@ -142,65 +142,76 @@ export async function GET(req: NextRequest) {
               },
             }))
           );
-
-          // Also get trending topics if no specific query
-          if (!query && (source === "trending" || source === "all")) {
-            const trends = await getTrendingTopics(twitterToken);
-            // Store as hashtag trends
-            for (const t of trends.slice(0, 10)) {
-              if (save) {
-                await supabase.from("trends").upsert(
-                  {
-                    platform: "twitter",
-                    type: "hashtag",
-                    name: t.name.toLowerCase(),
-                    data: { tweetVolume: t.tweetVolume, url: t.url },
-                    score: t.tweetVolume || 0,
-                  },
-                  { onConflict: "platform,type,name" }
-                );
-              }
-            }
-          }
         } catch (e: any) {
           errors.twitter = e.message;
         }
       } else if (platformFilter === "twitter") {
-        errors.twitter = "X/Twitter Bearer Token not configured — add it in Settings";
+        errors.twitter = "APIFY_API_TOKEN not configured — add it in Settings";
       }
     }
 
-    // ---- TIKTOK ----
+    // ---- TIKTOK (via Apify) ----
     if (platformFilter === "all" || platformFilter === "tiktok") {
-      try {
-        const searchQuery = query || "trending";
-        const tiktokVideos = await searchTikTokVideos(searchQuery, 20);
-        results.push(
-          ...tiktokVideos.map((v) => ({
-            id: v.id,
-            platform: "tiktok",
-            title: v.title,
-            description: v.description,
-            thumbnail: v.thumbnail,
-            channelTitle: `@${v.authorUsername}`,
-            viewCount: v.viewCount,
-            likeCount: v.likeCount,
-            commentCount: v.commentCount,
-            publishedAt: v.createdAt,
-            url: v.url,
-            source: "search",
-            extra: { shareCount: v.shareCount },
-          }))
-        );
-      } catch (e: any) {
-        errors.tiktok = e.message;
+      const apifyToken = process.env.APIFY_API_TOKEN;
+      if (apifyToken) {
+        try {
+          const searchQuery = query || "trending";
+          const tiktokVideos = await searchTikTokVideos(searchQuery, 20);
+          results.push(
+            ...tiktokVideos.map((v) => ({
+              id: v.id,
+              platform: "tiktok",
+              title: v.title,
+              description: v.description,
+              thumbnail: v.thumbnail,
+              channelTitle: `@${v.authorUsername}`,
+              viewCount: v.viewCount,
+              likeCount: v.likeCount,
+              commentCount: v.commentCount,
+              publishedAt: v.createdAt,
+              url: v.url,
+              source: "search",
+              extra: { shareCount: v.shareCount },
+            }))
+          );
+        } catch (e: any) {
+          errors.tiktok = e.message;
+        }
+      } else if (platformFilter === "tiktok") {
+        errors.tiktok = "APIFY_API_TOKEN not configured — add it in Settings";
       }
     }
 
-    // ---- INSTAGRAM ----
-    if (platformFilter === "instagram") {
-      errors.instagram =
-        "Instagram discovery requires browser automation (OpenClaw). Track individual Reels via the + button.";
+    // ---- INSTAGRAM (via Apify) ----
+    if (platformFilter === "all" || platformFilter === "instagram") {
+      const apifyToken = process.env.APIFY_API_TOKEN;
+      if (apifyToken) {
+        try {
+          const searchQuery = query || "trending";
+          const posts = await searchInstagramPosts(searchQuery, 20);
+          results.push(
+            ...posts.map((p) => ({
+              id: p.id,
+              platform: "instagram",
+              title: p.title,
+              description: p.description,
+              thumbnail: p.thumbnail,
+              channelTitle: `@${p.authorUsername}`,
+              viewCount: p.viewCount,
+              likeCount: p.likeCount,
+              commentCount: p.commentCount,
+              publishedAt: p.createdAt,
+              url: p.url,
+              source: "search",
+              extra: { isVideo: p.isVideo },
+            }))
+          );
+        } catch (e: any) {
+          errors.instagram = e.message;
+        }
+      } else if (platformFilter === "instagram") {
+        errors.instagram = "APIFY_API_TOKEN not configured — add it in Settings";
+      }
     }
 
     // Deduplicate

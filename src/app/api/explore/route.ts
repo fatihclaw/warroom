@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getApiKey } from "@/lib/keys";
+import { getTikTokProfile } from "@/lib/fetchers/tiktok";
+import { getInstagramProfile } from "@/lib/fetchers/instagram";
+import { getTwitterProfile } from "@/lib/fetchers/twitter";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -8,7 +11,7 @@ const supabase = createClient(
   { auth: { autoRefreshToken: false, persistSession: false } }
 );
 
-// GET /api/explore — search for YouTube channels
+// GET /api/explore — search for accounts across platforms
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -78,10 +81,118 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ results });
     }
 
-    // For other platforms, return empty for now
+    // TikTok, Instagram, Twitter — use Apify fetchers to look up the profile by query as username
+    if (platform === "tiktok") {
+      if (!process.env.APIFY_API_TOKEN) {
+        return NextResponse.json(
+          { error: "APIFY_API_TOKEN not configured. Add it in Settings." },
+          { status: 400 }
+        );
+      }
+
+      const profile = await getTikTokProfile(query);
+      if (!profile || (!profile.followerCount && !profile.displayName)) {
+        return NextResponse.json({ results: [] });
+      }
+
+      const { data: tracked } = await supabase
+        .from("tracked_accounts")
+        .select("username")
+        .eq("platform", "tiktok");
+      const trackedUsernames = new Set((tracked || []).map((t) => t.username));
+
+      return NextResponse.json({
+        results: [{
+          id: profile.username,
+          platform: "tiktok",
+          username: profile.username,
+          display_name: profile.displayName,
+          description: profile.bio?.slice(0, 200) || "",
+          avatar_url: profile.avatar,
+          subscriber_count: profile.followerCount,
+          video_count: profile.videoCount,
+          view_count: profile.likeCount,
+          already_tracked: trackedUsernames.has(profile.username),
+          profile_url: `https://www.tiktok.com/@${profile.username}`,
+        }],
+      });
+    }
+
+    if (platform === "instagram") {
+      if (!process.env.APIFY_API_TOKEN) {
+        return NextResponse.json(
+          { error: "APIFY_API_TOKEN not configured. Add it in Settings." },
+          { status: 400 }
+        );
+      }
+
+      const profile = await getInstagramProfile(query);
+      if (!profile) {
+        return NextResponse.json({ results: [] });
+      }
+
+      const { data: tracked } = await supabase
+        .from("tracked_accounts")
+        .select("username")
+        .eq("platform", "instagram");
+      const trackedUsernames = new Set((tracked || []).map((t) => t.username));
+
+      return NextResponse.json({
+        results: [{
+          id: profile.username,
+          platform: "instagram",
+          username: profile.username,
+          display_name: profile.displayName,
+          description: profile.bio?.slice(0, 200) || "",
+          avatar_url: profile.avatar,
+          subscriber_count: profile.followerCount,
+          video_count: profile.postCount,
+          view_count: 0,
+          already_tracked: trackedUsernames.has(profile.username),
+          profile_url: `https://www.instagram.com/${profile.username}/`,
+        }],
+      });
+    }
+
+    if (platform === "twitter") {
+      if (!process.env.APIFY_API_TOKEN) {
+        return NextResponse.json(
+          { error: "APIFY_API_TOKEN not configured. Add it in Settings." },
+          { status: 400 }
+        );
+      }
+
+      const profile = await getTwitterProfile(query);
+      if (!profile) {
+        return NextResponse.json({ results: [] });
+      }
+
+      const { data: tracked } = await supabase
+        .from("tracked_accounts")
+        .select("username")
+        .eq("platform", "twitter");
+      const trackedUsernames = new Set((tracked || []).map((t) => t.username));
+
+      return NextResponse.json({
+        results: [{
+          id: profile.username,
+          platform: "twitter",
+          username: profile.username,
+          display_name: profile.displayName,
+          description: profile.bio?.slice(0, 200) || "",
+          avatar_url: profile.avatar,
+          subscriber_count: profile.followerCount,
+          video_count: profile.tweetCount,
+          view_count: 0,
+          already_tracked: trackedUsernames.has(profile.username),
+          profile_url: `https://x.com/${profile.username}`,
+        }],
+      });
+    }
+
     return NextResponse.json({
       results: [],
-      message: `Search for ${platform} accounts is not yet supported. Try YouTube.`,
+      message: `Search for ${platform} accounts is not yet supported.`,
     });
   } catch (err: any) {
     console.error("Explore API error:", err);

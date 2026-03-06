@@ -1,5 +1,4 @@
-// X/Twitter fetcher — uses syndication API + oembed (no API key needed for basic data)
-// Falls back to API v2 if bearer token is available
+// X/Twitter fetcher — uses Apify Actor: quacker/twitter-scraper
 
 export interface Tweet {
   id: string;
@@ -31,59 +30,28 @@ export interface TwitterProfile {
   isVerified: boolean;
 }
 
-const HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-};
+const APIFY_TOKEN = () => process.env.APIFY_API_TOKEN || "";
+const ACTOR_ID = "quacker~twitter-scraper";
 
-// Get tweet info via syndication API (no auth required)
-export async function getTweetBySyndication(tweetId: string): Promise<Tweet | null> {
-  try {
-    const res = await fetch(
-      `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en&token=0`,
-      {
-        headers: {
-          ...HEADERS,
-          Accept: "application/json",
-        },
-      }
-    );
+async function runApifyActor(input: Record<string, any>): Promise<any[]> {
+  const token = APIFY_TOKEN();
+  if (!token) throw new Error("APIFY_API_TOKEN not configured");
 
-    if (!res.ok) return null;
+  const res = await fetch(
+    `https://api.apify.com/v2/acts/${ACTOR_ID}/run-sync-get-dataset-items?token=${token}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, timeoutSecs: 120 }),
+    }
+  );
 
-    const data = await res.json();
-    if (!data || data.__typename === "TweetTombstone") return null;
-
-    const user = data.user || {};
-    const text = data.text || "";
-
-    return {
-      id: data.id_str || tweetId,
-      text,
-      authorId: user.id_str || "",
-      authorName: user.name || "",
-      authorUsername: user.screen_name || "",
-      authorAvatar: user.profile_image_url_https || "",
-      viewCount: data.views_count ? Number(data.views_count) : 0,
-      likeCount: data.favorite_count || 0,
-      retweetCount: data.retweet_count || 0,
-      replyCount: data.reply_count || data.conversation_count || 0,
-      quoteCount: data.quote_count || 0,
-      bookmarkCount: data.bookmark_count || 0,
-      createdAt: data.created_at
-        ? new Date(data.created_at).toISOString()
-        : "",
-      mediaUrl:
-        data.mediaDetails?.[0]?.media_url_https ||
-        data.photos?.[0]?.url ||
-        undefined,
-      hashtags: extractHashtags(text),
-      url: `https://x.com/${user.screen_name || "i"}/status/${tweetId}`,
-    };
-  } catch {
-    return null;
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Apify Twitter error (${res.status}): ${text.substring(0, 200)}`);
   }
+
+  return res.json();
 }
 
 // Get tweet via oembed (basic info, always works)
@@ -92,8 +60,7 @@ export async function getTweetOembed(
 ): Promise<{ authorName: string; authorUrl: string; html: string } | null> {
   try {
     const res = await fetch(
-      `https://publish.twitter.com/oembed?url=${encodeURIComponent(url)}&omit_script=true`,
-      { headers: HEADERS }
+      `https://publish.twitter.com/oembed?url=${encodeURIComponent(url)}&omit_script=true`
     );
     if (!res.ok) return null;
     const data = await res.json();
@@ -107,100 +74,119 @@ export async function getTweetOembed(
   }
 }
 
-// Fetch tweet with best available data
+// Fetch tweet via Apify (replaces syndication + oembed approach)
 export async function getTweet(tweetId: string, username?: string): Promise<Tweet | null> {
-  // Try syndication first (richest data, no auth)
-  const syndicationTweet = await getTweetBySyndication(tweetId);
-  if (syndicationTweet) return syndicationTweet;
+  try {
+    const tweetUrl = username
+      ? `https://x.com/${username}/status/${tweetId}`
+      : `https://x.com/i/status/${tweetId}`;
 
-  // Fallback to oembed for basic info
-  const url = username
-    ? `https://x.com/${username}/status/${tweetId}`
-    : `https://x.com/i/status/${tweetId}`;
+    const items = await runApifyActor({
+      tweetIDs: [tweetId],
+      maxItems: 1,
+    });
 
-  const oembed = await getTweetOembed(url);
-  if (oembed) {
-    // Extract text from oembed HTML
-    const textMatch = oembed.html.match(/<p[^>]*>([\s\S]*?)<\/p>/);
-    const text = textMatch?.[1]?.replace(/<[^>]+>/g, "") || "";
+    if (items.length > 0) {
+      return mapTweetItem(items[0], tweetId);
+    }
 
-    return {
-      id: tweetId,
-      text,
-      authorId: "",
-      authorName: oembed.authorName,
-      authorUsername: username || oembed.authorUrl.split("/").pop() || "",
-      authorAvatar: "",
-      viewCount: 0,
-      likeCount: 0,
-      retweetCount: 0,
-      replyCount: 0,
-      quoteCount: 0,
-      bookmarkCount: 0,
-      createdAt: "",
-      hashtags: extractHashtags(text),
-      url,
-    };
+    // Fallback to oembed
+    const oembed = await getTweetOembed(tweetUrl);
+    if (oembed) {
+      const textMatch = oembed.html.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+      const text = textMatch?.[1]?.replace(/<[^>]+>/g, "") || "";
+      return {
+        id: tweetId,
+        text,
+        authorId: "",
+        authorName: oembed.authorName,
+        authorUsername: username || oembed.authorUrl.split("/").pop() || "",
+        authorAvatar: "",
+        viewCount: 0,
+        likeCount: 0,
+        retweetCount: 0,
+        replyCount: 0,
+        quoteCount: 0,
+        bookmarkCount: 0,
+        createdAt: "",
+        hashtags: extractHashtags(text),
+        url: tweetUrl,
+      };
+    }
+
+    return null;
+  } catch {
+    // Fallback to oembed on Apify error
+    const tweetUrl = username
+      ? `https://x.com/${username}/status/${tweetId}`
+      : `https://x.com/i/status/${tweetId}`;
+    const oembed = await getTweetOembed(tweetUrl);
+    if (oembed) {
+      const textMatch = oembed.html.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+      const text = textMatch?.[1]?.replace(/<[^>]+>/g, "") || "";
+      return {
+        id: tweetId,
+        text,
+        authorId: "",
+        authorName: oembed.authorName,
+        authorUsername: username || oembed.authorUrl.split("/").pop() || "",
+        authorAvatar: "",
+        viewCount: 0,
+        likeCount: 0,
+        retweetCount: 0,
+        replyCount: 0,
+        quoteCount: 0,
+        bookmarkCount: 0,
+        createdAt: "",
+        hashtags: extractHashtags(text),
+        url: tweetUrl,
+      };
+    }
+    return null;
   }
-
-  return null;
 }
 
-// Fetch X profile via syndication timeline endpoint
+// Kept for backward compat — now routes through getTweet
+export async function getTweetBySyndication(tweetId: string): Promise<Tweet | null> {
+  return getTweet(tweetId);
+}
+
+// Fetch X profile via Apify
 export async function getTwitterProfile(username: string): Promise<TwitterProfile | null> {
   try {
     const cleanUsername = username.replace("@", "");
 
-    // Try the syndication timeline endpoint
-    const res = await fetch(
-      `https://syndication.twitter.com/srv/timeline-profile/screen-name/${cleanUsername}`,
-      {
-        headers: HEADERS,
-        redirect: "follow",
-      }
-    );
+    const items = await runApifyActor({
+      getFollowers: false,
+      getFollowing: false,
+      getRetweeters: false,
+      includeUnavailableUsers: false,
+      maxItems: 1,
+      twitterHandles: [cleanUsername],
+    });
 
-    if (!res.ok) {
+    if (items.length > 0) {
+      const p = items[0];
       return {
-        username: cleanUsername,
-        displayName: cleanUsername,
-        avatar: "",
-        followerCount: 0,
-        followingCount: 0,
-        tweetCount: 0,
-        bio: "",
-        isVerified: false,
+        username: p.userName || p.screen_name || p.username || cleanUsername,
+        displayName: p.name || p.displayName || cleanUsername,
+        avatar: p.profilePicture || p.profile_image_url_https || p.avatarUrl || "",
+        followerCount: p.followers || p.followersCount || p.followers_count || 0,
+        followingCount: p.following || p.friendsCount || p.friends_count || 0,
+        tweetCount: p.statusesCount || p.tweetsCount || p.statuses_count || 0,
+        bio: p.description || p.bio || "",
+        isVerified: p.isVerified || p.isBlueVerified || p.verified || false,
       };
     }
 
-    const html = await res.text();
-
-    // Extract user info from the timeline HTML
-    let displayName = cleanUsername;
-    let avatar = "";
-    let bio = "";
-
-    // Try to extract avatar from img tags
-    const avatarMatch = html.match(
-      /class="[^"]*Avatar[^"]*"[^>]*src="([^"]+)"/
-    ) || html.match(/profile_image[^"]*"[^>]*src="([^"]+)"/);
-
-    if (avatarMatch) avatar = avatarMatch[1];
-
-    // Try to extract display name
-    const nameMatch = html.match(
-      /class="[^"]*UserName[^"]*"[^>]*>([^<]+)</
-    ) || html.match(/<span[^>]*class="[^"]*name[^"]*"[^>]*>([^<]+)</i);
-    if (nameMatch) displayName = nameMatch[1].trim();
-
     return {
       username: cleanUsername,
-      displayName,
-      avatar,
+      displayName: cleanUsername,
+      avatar: "",
       followerCount: 0,
       followingCount: 0,
       tweetCount: 0,
-      bio,
+      bio: "",
       isVerified: false,
     };
   } catch {
@@ -208,78 +194,91 @@ export async function getTwitterProfile(username: string): Promise<TwitterProfil
   }
 }
 
-// Search tweets via API v2 (requires bearer token)
+// Search tweets via Apify (replaces API v2 bearer token approach)
 export async function searchPopularTweets(
-  bearerToken: string,
-  query: string,
-  maxResults = 25
+  _bearerTokenOrQuery: string,
+  queryOrMaxResults?: string | number,
+  maxResultsArg?: number
 ): Promise<Tweet[]> {
-  const params = new URLSearchParams({
-    query: `${query} -is:retweet lang:en`,
-    "tweet.fields": "public_metrics,created_at,author_id",
-    "user.fields": "name,username,profile_image_url",
-    expansions: "author_id,attachments.media_keys",
-    "media.fields": "url,preview_image_url",
-    max_results: String(Math.min(maxResults, 100)),
-    sort_order: "relevancy",
-  });
-
-  const res = await fetch(
-    `https://api.twitter.com/2/tweets/search/recent?${params}`,
-    { headers: { Authorization: `Bearer ${bearerToken}` } }
-  );
-
-  if (!res.ok) return [];
-
-  const data = await res.json();
-  if (!data.data) return [];
-
-  const users: Record<string, { name: string; username: string; avatar: string }> = {};
-  for (const u of data.includes?.users || []) {
-    users[u.id] = {
-      name: u.name,
-      username: u.username,
-      avatar: u.profile_image_url || "",
-    };
+  // Support both old signature (bearerToken, query, max) and new (query, max)
+  let query: string;
+  let maxResults: number;
+  if (typeof queryOrMaxResults === "string") {
+    // Old signature: searchPopularTweets(bearerToken, query, maxResults)
+    query = queryOrMaxResults;
+    maxResults = maxResultsArg || 25;
+  } else {
+    // New signature: searchPopularTweets(query, maxResults)
+    query = _bearerTokenOrQuery;
+    maxResults = (queryOrMaxResults as number) || 25;
   }
 
-  return data.data.map((tweet: any) => ({
-    id: tweet.id,
-    text: tweet.text,
-    authorId: tweet.author_id,
-    authorName: users[tweet.author_id]?.name || "",
-    authorUsername: users[tweet.author_id]?.username || "",
-    authorAvatar: users[tweet.author_id]?.avatar || "",
-    viewCount: tweet.public_metrics?.impression_count || 0,
-    likeCount: tweet.public_metrics?.like_count || 0,
-    retweetCount: tweet.public_metrics?.retweet_count || 0,
-    replyCount: tweet.public_metrics?.reply_count || 0,
-    quoteCount: tweet.public_metrics?.quote_count || 0,
-    bookmarkCount: tweet.public_metrics?.bookmark_count || 0,
-    createdAt: tweet.created_at,
-    hashtags: extractHashtags(tweet.text),
-    url: `https://x.com/${users[tweet.author_id]?.username || "i"}/status/${tweet.id}`,
-  }));
+  try {
+    const items = await runApifyActor({
+      searchTerms: [query],
+      maxItems: Math.min(maxResults, 30),
+      sort: "Top",
+    });
+
+    return items
+      .map((item: any) => mapTweetItem(item))
+      .filter((t): t is Tweet => t !== null);
+  } catch {
+    return [];
+  }
 }
 
-// Get trending topics (requires bearer token, uses v1.1 endpoint)
+// Get trending topics via Apify
 export async function getTrendingTopics(
-  bearerToken: string,
-  woeid = 1
+  _bearerToken?: string,
+  _woeid?: number
 ): Promise<{ name: string; tweetVolume: number | null; url: string }[]> {
-  const res = await fetch(
-    `https://api.twitter.com/1.1/trends/place.json?id=${woeid}`,
-    { headers: { Authorization: `Bearer ${bearerToken}` } }
-  );
+  // Apify doesn't have a direct trending endpoint equivalent
+  // Return empty — trending is best handled by the discover route's search
+  return [];
+}
 
-  if (!res.ok) return [];
+function mapTweetItem(item: any, fallbackId?: string): Tweet | null {
+  if (!item) return null;
 
-  const data = await res.json();
-  return (data[0]?.trends || []).map((t: any) => ({
-    name: t.name,
-    tweetVolume: t.tweet_volume,
-    url: t.url,
-  }));
+  const id = item.id || item.id_str || item.tweetId || fallbackId || "";
+  const authorUsername =
+    item.author?.userName ||
+    item.user?.screen_name ||
+    item.authorUsername ||
+    item.screen_name ||
+    "";
+
+  return {
+    id,
+    text: item.text || item.full_text || item.fullText || "",
+    authorId: item.author?.id || item.user?.id_str || item.authorId || "",
+    authorName: item.author?.name || item.user?.name || item.authorName || "",
+    authorUsername,
+    authorAvatar:
+      item.author?.profilePicture ||
+      item.user?.profile_image_url_https ||
+      item.authorAvatar ||
+      "",
+    viewCount: item.viewCount || item.views?.count || item.impressionCount || 0,
+    likeCount: item.likeCount || item.favorite_count || item.favoritesCount || 0,
+    retweetCount: item.retweetCount || item.retweet_count || item.retweetsCount || 0,
+    replyCount: item.replyCount || item.reply_count || item.repliesCount || 0,
+    quoteCount: item.quoteCount || item.quote_count || item.quotesCount || 0,
+    bookmarkCount: item.bookmarkCount || item.bookmark_count || item.bookmarksCount || 0,
+    createdAt: item.createdAt || item.created_at
+      ? new Date(item.createdAt || item.created_at).toISOString()
+      : "",
+    mediaUrl:
+      item.media?.[0]?.url ||
+      item.entities?.media?.[0]?.media_url_https ||
+      item.mediaUrl ||
+      undefined,
+    hashtags: item.hashtags
+      ? item.hashtags.map((h: any) => `#${(h.text || h.tag || h).toString().toLowerCase()}`)
+      : extractHashtags(item.text || item.full_text || ""),
+    url: item.url || `https://x.com/${authorUsername || "i"}/status/${id}`,
+  };
 }
 
 function extractHashtags(text: string): string[] {
